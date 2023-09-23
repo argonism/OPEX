@@ -39,13 +39,21 @@ resources/denserr/analyzer/damaged_analyzer/{DeepCT_result_filename}
 resources/denserr/analyzer/damaged_analyzer/{SPLADE_result_filename}
 ```
 
+When changing the datasets, models, and various settings used in the experiments, please edit `conf/param.ini`.
+
+### Tasks
+
 To run Sentence Addition Analysis experiments, execute SentenceInstactAnalyze
 
 ```shell
 python main.py denserr.SentenceInstactAnalyze --local-scheduler
 ```
 
-When changing the datasets, models, and various settings used in the experiments, please edit `conf/param.ini`.
+For evaluate retireval effectiveness, run Evaluate Task
+
+```shell
+python main.py denserr.Evaluate --local-scheduler
+```
 
 ### For ColBERT, SPLADE
 
@@ -56,4 +64,14 @@ If you are using pyenv, don't forget to set the appropriate Python version using
 
 colbert: envs/colbert.yml
 splade: envs/ptsplade.yml
+
+e.g.
+
+```shell
+conda env create -f=envs/ptsplade.yml
+conda activate ptsplade
+
+# for pyenv
+pyenv local {your conda version}/envs/ptsplade
+```
 
