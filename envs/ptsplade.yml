@@ -72,7 +72,7 @@ dependencies:
       - cython==0.29.35
       - databricks-cli==0.17.7
       - datasets==2.12.0
-      - deepct==0.1.0
+      - git+https://github.com/cmacdonald/DeepCT.git
       - deprecated==1.2.14
       - dill==0.3.6
       - docker==6.1.3
@@ -235,7 +235,6 @@ dependencies:
       - tensorflow-estimator==2.12.0
       - tensorflow-io-gcs-filesystem==0.32.0
       - termcolor==2.3.0
-      - tevatron==0.0.1
       - text-unidecode==1.3
       - thinc==8.1.10
       - threadpoolctl==3.1.0
