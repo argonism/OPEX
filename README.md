@@ -1,8 +1,8 @@
 # Over-penalization against Extra Information in Neural IR Models
 
 ## Requirements
-For experiments with robust04, follow the instructions on the following ir-datasets instructions to set up TREC disks 4 and 5.
-https://ir-datasets.com/disks45.html#disks45/nocr/trec-robust-2004 
+For experiments with robust04, follow the instructions on the following ir-datasets to set up TREC disks 4 and 5.
+[https://ir-datasets.com/disks45.html#disks45/nocr/trec-robust-2004](https://ir-datasets.com/disks45.html#disks45/nocr/trec-robust-2004)
 
 ## Getting started
 
@@ -57,9 +57,9 @@ python main.py denserr.Evaluate --local-scheduler
 
 ### For ColBERT, SPLADE
 
-To resolve dependency issues, we have prepared an conda environment yml for both ColBERT and SPLADE. 
+To resolve dependency issues, we have prepared conda environment yml files for both ColBERT and SPLADE. 
 If you want to use either of these models, create and activate their respective conda envs.
-If you are using pyenv, don't forget to set the appropriate Python version using pyenv local [version].
+If you are using pyenv, don't forget to set the appropriate Python version using `pyenv local [version]`.
 
 
 colbert: envs/colbert.yml
