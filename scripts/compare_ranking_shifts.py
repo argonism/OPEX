@@ -8,6 +8,7 @@ from collections import defaultdict
 
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,13 +18,16 @@ from denserr.analyzer.distribution_visualizer import DistributionVisualizer
 
 MODEL_NAME_PATCH_TABLE = {
     "bm25-msmarco-doc": "BM25",
+    "bm25-robust04": "BM25",
     "bm25": "BM25",
     "ptsplade": "SPLADE",
     "dpr": "DPR",
     "ance": "ANCE",
     "colbert": "ColBERT",
     "deepct": "DeepCT",
-    "sent": "Sent",
+    "-sent-parallel": "-W1",
+    "sent-": "",
+    "-sent": "-W1",
     "-parallel": "",
     "-w": "-W",
 }
@@ -47,9 +51,8 @@ class CompareRankshiftsDistribution:
         logger.info(self.base_info)
         self.result_infos = result_infos
         self.labels = [info["model_name"] for info in result_infos]
-        if self.for_paper:
-            self.labels = self.patch_model_name(self.labels)
-            print(self.labels)
+        self.labels = self.patch_model_name(self.labels)
+        print(self.labels)
 
         self.dataset_name = self.base_info["dataset"]
         self.base_model_name = self.base_info["model_name"]
@@ -108,6 +111,41 @@ class CompareRankshiftsDistribution:
         else:
             return "&".join(self.labels)
 
+    def line_styles(self, model_names: List[str]) -> Dict[str, Dict[str, str]]:
+        if self.is_windowed:
+            return None
+
+        colors = sns.color_palette("tab10", n_colors=4)
+        PALLET = {
+            "BM25": {"color": "k", "linewidth": 3},
+            "ANCE": {"color": colors[0]},
+            "ColBERT": {"color": colors[1]},
+            "DeepCT": {"color": colors[2]},
+            "SPLADE": {"color": colors[3]},
+            "-W": {"linestyle": (0, (5, 2))},
+            # "ANCE-W1": {"color": "#edcdab"},
+            # "ANCE-W5": {"linestyle": (0, (5, 2, 1, 2)), "color": "#dfa86d"},
+            # "ANCE-W10": {"linestyle": (0, (5, 2)), "color": "#d1822e"},
+            # "ANCE-W15": {"linestyle": (0, (5, 2, 1, 2)), "color": "#925b20"},
+            # "ANCE-W20": {"linestyle": (0, (5, 2)), "color": "#543412"},
+            # "SPLADE-W1": {"color": "#adebcc"},
+            # "SPLADE-W5": {"linestyle": (0, (5, 2, 1, 2)), "color": "#70dba6"},
+            # "SPLADE-W10": {"linestyle": (0, (5, 2)), "color": "#33cc80"},
+            # "SPLADE-W15": {"linestyle": (0, (5, 2, 1, 2)), "color": "#248f59"},
+            # "SPLADE-W20": {"linestyle": (0, (5, 2)), "color": "#145233"},
+            # "-W5": {"linestyle": "--", "alpha": 0.20},
+            # "-W10": {"linestyle": "--", "alpha": 0.35},
+            # "-W15": {"linestyle": "--", "alpha": 0.55},
+            # "-W20": {"linestyle": "--", "alpha": 0.75},
+        }
+        styles = {}
+        for model_name in model_names:
+            styles[model_name] = {}
+            for name_pattern in PALLET:
+                if name_pattern in model_name:
+                    styles[model_name].update(**PALLET[name_pattern])
+        return styles
+
     def gen_figs_title(
         self,
         fig_name: str,
@@ -117,10 +155,19 @@ class CompareRankshiftsDistribution:
     ) -> str:
         if self.for_paper:
             analysis_method = "Addition" if self.is_intact else "Deletion"
-            dataset = (
-                "Robust04" if self.dataset_name == "robust04" else "MSMARCO Document"
-            )
-            title = f"Sentence {analysis_method} Analysis on {dataset}"
+            dataset = ""
+            if self.dataset_name == "robust04":
+                dataset = "Robust04"
+            elif self.dataset_name == "dl19-doc":
+                dataset = "TREC DL 19"
+            elif self.dataset_name == "dl20-doc":
+                dataset = "TREC DL 20"
+            elif self.dataset_name == "msmarco-doc":
+                dataset = "MS MARCO"
+            else:
+                raise Exception(f"Unknown dataset: {self.dataset_name}")
+            # title = f"Sentence {analysis_method} Analysis on {dataset}"
+            title = f"{dataset}"
             return title
 
         title = "\n".join(
@@ -132,6 +179,14 @@ class CompareRankshiftsDistribution:
         )
         return title
 
+    @property
+    def is_sent(self):
+        return any(["W1" in label for label in self.labels])
+
+    @property
+    def is_windowed(self):
+        return any(["W5" in label for label in self.labels])
+
     def gen_filename(
         self,
         hist_min: Union[int, float],
@@ -142,14 +197,13 @@ class CompareRankshiftsDistribution:
     ) -> str:
         if self.for_paper:
             analyze_method = "Intact" if self.is_intact else "Damaged"
-            is_sent = "_Sent" if any(["Sent" in label for label in self.labels]) else ""
-            is_windowed = any(["W" in label for label in self.labels])
-            windowed_label = "_Window" if is_windowed else ""
+            is_sent = "_Sent" if self.is_sent else ""
+            windowed_label = "_Window" if self.is_windowed else ""
             model_family = self.labels[0]
             save_fig_filename = (
                 f"for_paper/{analyze_method}_{self.dataset_name}"
                 f"{is_sent}{windowed_label}"
-                f"_{model_family if is_windowed else ''}"
+                f"_{model_family if self.is_windowed else ''}"
                 f"{hist_min}_{hist_max}_{step}"
                 f"{'_' + additional if additional is not None else ''}"
                 f"{'_'.join(self.extras)}.png"
@@ -191,19 +245,10 @@ class CompareRankshiftsDistribution:
                 density=density,
                 include_under=include_under,
             )
-            acc_freq_distr = np.cumsum(freq_distr)
-            ax.plot(
-                bin_edges[1:],
-                acc_freq_distr,
-                label=label,
-                color="0.7" if i <= 0 else None,
-            )
-            for i, freq in enumerate(acc_freq_distr):
+            for i, freq in enumerate(freq_distr):
                 le = "$\le$" if self.for_paper else "≤"
                 freq_range = f"{le} {bin_edges[i+1]}"
-                # table[freq_range][label] = len(ranking_shifts) - freq
-                table[freq_range][label] = 100*(1 - freq)
-                # table[freq_range][label] = freq
+                table[freq_range][label] = 100 - freq
 
         header_line = "|NRS|"
         spacer_line = "| --------------- |"
@@ -218,31 +263,17 @@ class CompareRankshiftsDistribution:
                 column += f"$^\\ast${table[freq][label]:.3f}|"
             print(column)
 
-        # model_names_text = "&".join(self.labels)
-        # title = "\n".join(
-        #     [
-        #         f"{model_names_text} on {self.dataset_name} accumlated rank shift frequency distribution",
-        #         f"rank range: -10000 < -{hist_min}, x < {hist_max}, step: {step}",
-        #     ]
-        # )
         fig_title = "accumlated rank shift frequency distribution"
         title = self.gen_figs_title(fig_title, hist_min, hist_max, step)
 
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        # save_fig_filename = (
-        #     f"{self.dataset_name}/{self.model_names_text}_@{self.target_rank}_"
-        #     f"{self.damaged_start_at}-{self.damaged_until}_{self.sample_repeat_times}_"
-        #     f"{hist_min}_{hist_max}_{step}_"
-        #     f"{'dense' if density else ''}.png"
-        # )
         save_fig_filename = self.gen_filename(hist_min, hist_max, step, density)
         save_fig_path = save_dir.joinpath(save_fig_filename)
 
         plt.xticks(rotation=-45)
         ax.set_title(title)
         ax.minorticks_on()
-        # ax.grid()
         ax.grid(which="major", color="0.8")
         ax.grid(which="minor", color="0.9", linestyle="--")
         ax.tick_params(axis="x", labelsize=14)
@@ -298,12 +329,6 @@ class CompareRankshiftsDistribution:
 
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        # save_fig_filename = (
-        #     f"{self.dataset_name}/{self.model_names_text}_@{self.target_rank}_"
-        #     f"{self.damaged_start_at}-{self.damaged_until}_{self.sample_repeat_times}_"
-        #     f"{hist_min}_{hist_max}_{step}_"
-        #     f"{'dense' if density else ''}.png"
-        # )
         save_fig_filename = self.gen_filename(hist_min, hist_max, step, density)
         save_fig_path = save_dir.joinpath(save_fig_filename)
         visualizer.plot_shift_frequency_distr(
@@ -333,6 +358,8 @@ class CompareRankshiftsDistribution:
         y_lim: Optional[float] = None,
         include_under: bool = True,
         start_from: Optional[int] = None,
+        line_styles: List[str] = None,
+        color_pallet: List[str] = None,
     ) -> None:
         if hist_min is None:
             hist_min = -self.damaged_until
@@ -344,13 +371,6 @@ class CompareRankshiftsDistribution:
 
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        # save_fig_filename = (
-        #     f"{self.dataset_name}/{self.model_names_text}_@{self.target_rank}_"
-        #     f"{self.damaged_start_at}-{self.damaged_until}_{self.sample_repeat_times}_"
-        #     f"{hist_min}_{hist_max}_{step}_"
-        #     f"{start_from if start_from is not None else ''}_"
-        #     f"{'dense' if density else ''}.png"
-        # )
         additional = None if start_from is None else str(start_from)
         save_fig_filename = self.gen_filename(
             hist_min, hist_max, step, density, additional=additional
@@ -370,10 +390,17 @@ class CompareRankshiftsDistribution:
             accumulate=True,
             start_from=start_from,
             for_paper=self.for_paper,
+            line_styles=line_styles,
+            color_pallet=color_pallet,
         )
 
     def load_cache(self, path: Path) -> Any:
         return pickle.loads(path.read_bytes())
+
+    def color_pallet(
+        self,
+    ):
+        return "mako" if any(["ANCE" in label for label in self.labels]) else "rocket"
 
     def run(self) -> None:
         visualizer = DistributionVisualizer(self.damaged_start_at, self.damaged_until)
@@ -384,29 +411,13 @@ class CompareRankshiftsDistribution:
             )
             ranking_shifts.append(ranking_shift)
             nrses.append(nrs)
-        # (base_ranking_shifts, base_nrs, _, _) = visualizer.calc_shift_ranks(
-        #     self.load_cache(self.base_result_path)
-        # )
-        # (target_ranking_shifts, target_nrs, _, _) = visualizer.calc_shift_ranks(
-        #     self.load_cache(self.target_result_path)
-        # )
+        line_styles = self.line_styles(self.labels)
 
         base_save_path = Path(__file__).parent
         if self.is_intact:
             base_save_path = base_save_path.joinpath("sentence_intact")
 
         save_path = base_save_path.joinpath("damaged_ranking_shifts")
-        self.plot_shift_frequency_distr(visualizer, ranking_shifts, save_dir=save_path)
-        self.plot_shift_frequency_distr(
-            visualizer,
-            nrses,
-            hist_min=0,
-            hist_max=1,
-            step=0.05,
-            density=True,
-            include_under=False,
-            save_dir=save_path,
-        )
 
         save_path = base_save_path.joinpath("damaged_ranking_shifts_acc_line")
         self.plot_acc_shift_frequency_distr_line(
@@ -414,38 +425,27 @@ class CompareRankshiftsDistribution:
             ranking_shifts,
             step=1,
             save_dir=save_path,
+            line_styles=line_styles,
         )
         self.plot_acc_shift_frequency_distr_line(
             visualizer,
             ranking_shifts,
-            hist_min=0,
+            hist_min=50,
             step=1,
             density=True,
+            y_lim=15,
             include_under=False,
             save_dir=save_path,
+            line_styles=line_styles,
+            color_pallet=self.color_pallet(),
         )
-        self.plot_acc_shift_frequency_distr_line(
-            visualizer,
-            ranking_shifts,
-            hist_min=0,
-            step=1,
-            density=True,
-            include_under=False,
-            start_from=100,
-            save_dir=save_path,
-        )
-        # self.accum_freq_distr_table(
-        #     visualizer,
-        #     nrses,
-        #     self.labels,
-        # )
-        save_path = base_save_path.joinpath("damaged_ranking_shifts_freq")
+
         self.accum_freq_distr_table(
             visualizer,
             ranking_shifts,
             self.labels,
-            hist_max=self.damaged_until,
-            hist_min=-self.damaged_until,
+            hist_min=25,
+            hist_max=200,
             step=25,
             density=True,
             include_under=True,
@@ -474,8 +474,7 @@ def parse_args() -> Namespace:
         default=False,
         help="True indicating output graphs for paper. (e.g. remove title)",
     )
-    # parser.add_argument("base_result")
-    # parser.add_argument("target_result")
+
     args, other = parser.parse_known_args()
     return args
 
@@ -484,7 +483,6 @@ if __name__ == "__main__":
     args = parse_args()
 
     CompareRankshiftsDistribution(
-        # Path(args.base_result), Path(args.target_result)
         [Path(filepath) for filepath in args.result_files],
         intact=args.intact,
         ignore_extra=args.ignore_extra,

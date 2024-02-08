@@ -23,11 +23,12 @@ from denserr.dataset.msmarco_doc import LoadMSMarcoDocument
 from denserr.dataset.robust04 import LoadRobust04
 from denserr.dataset.nfcorpus import LoadNFCorpus
 from denserr.dataset.scifact import LoadScifact
+from denserr.dataset.trec_dl19 import LoadTrecDL19Doc
+from denserr.dataset.trec_dl20 import LoadTrecDL20Doc
 from denserr.utils.template import GokartTask
 from denserr.model.load_model import LoadRetriever
 from denserr.utils import util
-
-from ._base import ILoadModel, LargeCorpusSequentialDict, PolarsCorpusLoader
+from ._base import ILoadModel, PolarsCorpusLoader
 
 logger = getLogger(__name__)
 
@@ -35,6 +36,8 @@ logger = getLogger(__name__)
 AVAILABLE_DATASET: Dict[str, ILoadModel] = {
     "msmarco-pas": LoadMSMarcoPassage(),
     "msmarco-doc": LoadMSMarcoDocument(),
+    "dl19-doc": LoadTrecDL19Doc(),
+    "dl20-doc": LoadTrecDL20Doc(),
     "robust04": LoadRobust04(),
     "nfcorpus": LoadNFCorpus(),
     "scifact": LoadScifact(),

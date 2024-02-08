@@ -13,6 +13,7 @@ from gokart.config_params import inherits_config_params
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
+import seaborn as sns
 
 import matplotlib as mpl
 
@@ -80,6 +81,7 @@ class DistributionVisualizer:
                 perturbed_score,
                 damaged,
                 perturbation,
+                *position,
             ) in damaged_result[qid]:
                 if orig_rank - new_rank < -100000:
                     print(f"{qid} at {orig_rank}")
@@ -87,7 +89,11 @@ class DistributionVisualizer:
                 ranking_shift = (
                     new_rank - orig_rank if is_intact else orig_rank - new_rank
                 )
-                normalized_ranking_shift = ranking_shift / (orig_rank - 1)
+                normalized_ranking_shift = (
+                    ranking_shift / (orig_rank + 1)
+                    if is_intact
+                    else ranking_shift / (orig_rank - 1)
+                )
                 ranking_shifts.append(ranking_shift)
                 normalized_ranking_shifts.append(normalized_ranking_shift)
                 new_ranks.append(new_rank)
@@ -104,6 +110,7 @@ class DistributionVisualizer:
         include_under: bool = True,
         accumulate: bool = False,
         start_from: Optional[float] = None,
+        for_paper: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray]:
         if hist_min is None:
             hist_min = -self.damaged_until
@@ -136,6 +143,10 @@ class DistributionVisualizer:
                     new_bin_edges.append(edge)
             freq_distr = new_freq_distr
             bin_edges = new_bin_edges
+
+        freq_distr = [100 * (1 - freq) for freq in freq_distr]
+        # if for_paper:
+        #     freq_distr = [100 * (1 - freq) for freq in freq_distr]
         return freq_distr, bin_edges
 
     def plot_score_distr(
@@ -201,6 +212,7 @@ class DistributionVisualizer:
             ax = fig.add_subplot(1, 1, 1)
 
         if y_lim is not None:
+            logger.info(f"setting y lim: {0} ~ {y_lim}")
             ax.set_ylim(0, y_lim)
 
         if (labels is not None) and not len(labels) == len(ranking_shifts_list):
@@ -244,8 +256,9 @@ class DistributionVisualizer:
             )
 
         # plt.xticks(rotation=-45)
-        if not for_paper:
-            ax.set_title(title)
+        ax.set_title(title)
+        # if not for_paper:
+        #     ax.set_title(title)
         labelsize = 40 if for_paper else 25
         ax.set_xlabel(xlabel, fontsize=labelsize)
         ax.set_ylabel(xlabel, fontsize=labelsize)
@@ -275,7 +288,7 @@ class DistributionVisualizer:
         step: Union[int, float] = 25,
         density: bool = True,
         title: str = "",
-        y_lim: Optional[float] = None,
+        y_lim: float = 100,
         include_under: bool = True,
         accumulate: bool = True,
         start_from: Optional[int] = None,
@@ -283,15 +296,20 @@ class DistributionVisualizer:
         fig: Any = None,
         ax: Any = None,
         for_paper: bool = False,
-        xlabel: str = "Rank shift",
-        ylabel: str = "Cumulative frequency",
+        xlabel: str = "$t$",
+        ylabel: str = "${\\rm RS}_t$ (%)",
+        line_styles: Optional[Dict] = None,
+        color_pallet: str = "mako",
     ) -> None:
+        logger.info(f"plot_acc_ranking_shift_line (ylim={y_lim})")
+        sns.set_palette(color_pallet)
         if fig is None:
-            fig = plt.figure(figsize=(24, 7))
+            fig = plt.figure(figsize=(12, 7))
         if ax is None:
             ax = fig.add_subplot(1, 1, 1)
 
         if y_lim is not None:
+            logger.info(f"setting y_lim: ({0}, {y_lim})")
             ax.set_ylim(0, y_lim)
 
         if (labels is not None) and not len(labels) == len(ranking_shifts_list):
@@ -300,6 +318,7 @@ class DistributionVisualizer:
                 + f" {len(labels)} and {len(ranking_shifts_list)}",
             )
         labels_iter = [""] * len(ranking_shifts_list) if labels is None else labels
+        # colors_iter = [None] * len(ranking_shifts_list) if line_styles is None else line_styles
 
         freq_distrs = []
         for i, (ranking_shifts, label) in enumerate(
@@ -314,6 +333,7 @@ class DistributionVisualizer:
                 include_under=include_under,
                 accumulate=accumulate,
                 start_from=start_from,
+                for_paper=for_paper,
             )
             freq_distrs.append(freq_distr)
             # print(f"rank promoted propotion of {label}: {sum(freq_distr):.3f}")
@@ -324,13 +344,17 @@ class DistributionVisualizer:
             #     for x in bin_edges[1:]
             # ]
 
-            ax.plot(
-                bin_edges[1:],
-                freq_distr,
-                label=label,
-                linewidth=2,
-                color="0.75" if grayout_first and i <= 0 else None,
+            line_style = (
+                line_styles[label]
+                if (line_styles is not None) and (label in line_styles)
+                else {}
             )
+            if "linewidth" not in line_style:
+                line_style["linewidth"] = 4
+
+            # if grayout_first and i <= 0:
+            #     line_style["color"] = "0.25"
+            ax.plot(bin_edges[1:], freq_distr, label=label, **line_style)
             # if start_from is not None:
             #     for edge, freq in zip(bin_edges[1:], freq_distr):
             #         if edge % 10 == 0:
@@ -338,24 +362,24 @@ class DistributionVisualizer:
             # ax.set_xticklabels(x_labels)
 
         # plt.xticks(rotation=-45)
-
-        ax.set_title(title, fontsize=35)
+        start, end, step = hist_min, hist_max, 50
+        xtics = list(range(start, end + 1, step))
+        ax.set_xticks(xtics)
+        # ax.set_ylim(top=100)
+        # ax.set_yticks([i for i in range(0, 21, 5)])
+        ax.set_title(title, fontsize=40)
         ax.minorticks_on()
-        # ax.grid()
-        ax.grid(which="major", color="0.8")
-        ax.grid(which="minor", color="0.9", linestyle="--")
-        labelsize = 45 if for_paper else 25
+
+        labelsize = 35 if for_paper else 25
         ax.set_xlabel(xlabel, fontsize=labelsize)
         ax.set_ylabel(ylabel, fontsize=labelsize)
         ax.tick_params(axis="x", labelsize=labelsize)
         ax.tick_params(axis="y", labelsize=labelsize)
         if labels is not None:
-            # fontsize = -5 * len(labels_iter) + 75
             leg = ax.legend(
                 fontsize=40 if for_paper else 30,
                 ncol=2 if len(label) > 5 else 1,
                 markerscale=2,
-                handlelength=0.5,
                 handleheight=0.5,
                 handletextpad=0.2,
                 borderpad=0.2,

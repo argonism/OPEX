@@ -24,6 +24,11 @@ class LoadRetriever:
         self.model_name = model_name
         self.batch_size = 16
 
+    def load_msance_parallel(
+        self, debug: bool = False, topk: int = 10000, overwrite: bool = False
+    ) -> Retriever:
+        return self.__load_msance_parallel({}, debug=debug, topk=topk, overwrite=False)
+
     def load_ance(self, use_pyterrier: bool = True, debug: bool = False) -> Retriever:
         encoder = AnceTextEncoder()
         if use_pyterrier:
@@ -45,7 +50,7 @@ class LoadRetriever:
             return wrapped_retriever
 
     def __load_ance_parallel(
-        self, model_confs: Dict, debug: bool, topk: int = 10000
+        self, model_confs: Dict, debug: bool, topk: int = 10000, overwrite: bool = False
     ) -> Retriever:
         retriever = PyTParallelDenseRetriever(
             load_ance,
@@ -55,12 +60,58 @@ class LoadRetriever:
             index_prefix="debug" if debug else "",
             topk=topk,
             segment_size=1_000_000,
-            overwrite=True,
+            overwrite=overwrite,
         )
         return retriever
 
-    def load_ance_parallel(self, debug: bool = False, topk: int = 10000) -> Retriever:
-        return self.__load_ance_parallel({}, debug=debug, topk=topk)
+    def load_ance_parallel(
+        self, debug: bool = False, topk: int = 10000, overwrite: bool = False
+    ) -> Retriever:
+        return self.__load_ance_parallel(
+            {}, debug=debug, topk=topk, overwrite=overwrite
+        )
+
+    def load_distil_ance_parallel_500(
+        self, debug: bool = False, topk: int = 10000
+    ) -> Retriever:
+        model_path = project_dir.joinpath("trained/distil/ance_w1/checkpoint-500")
+        model_confs = {
+            "model_path": str(model_path),
+            "tokenizer_name": "castorini/ance-msmarco-passage",
+        }
+        return self.__load_ance_parallel(model_confs, debug=debug, topk=topk)
+
+    def load_distil_ance_parallel_4000(
+        self, debug: bool = False, topk: int = 10000
+    ) -> Retriever:
+        model_path = project_dir.joinpath("trained/distil/ance_w1/checkpoint-4000")
+        model_confs = {
+            "model_path": str(model_path),
+            "tokenizer_name": "castorini/ance-msmarco-passage",
+        }
+        return self.__load_ance_parallel(model_confs, debug=debug, topk=topk)
+
+    def load_distil_w5_ance_parallel(
+        self, debug: bool = False, topk: int = 10000
+    ) -> Retriever:
+        model_path = project_dir.joinpath("trained/distil/ance_w5/")
+        model_confs = {
+            "model_path": str(model_path),
+            "tokenizer_name": model_path,
+        }
+        return self.__load_ance_parallel(model_confs, debug=debug, topk=topk)
+
+    def load_distil_w5_ance_parallel_checkpoint(
+        self, checkpoint: int, debug: bool = False, topk: int = 10000
+    ) -> Retriever:
+        model_path = project_dir.joinpath(
+            f"trained/distil/ance_w5/checkpoint-{checkpoint}"
+        )
+        model_confs = {
+            "model_path": str(model_path),
+            "tokenizer_name": "castorini/ance-msmarco-passage",
+        }
+        return self.__load_ance_parallel(model_confs, debug=debug, topk=topk)
 
     def __load_ance_sent(self, window_size: int, debug: bool = False) -> Retriever:
         retriever = PyTParallelDenseSentRetriever(
@@ -131,7 +182,8 @@ class LoadRetriever:
     def load_ance_random_500_cont_w_pert(
         self, use_pyterrier: bool = True, debug: bool = False
     ) -> Retriever:
-        # model_path = project_dir.joinpath("trained/perturbed_msmarco-pas_random_24")
+        # model_path = p/roject_dir.joinpath("trained/perturbed_msmarco-pas_random_24")
+        model_path = "/home/acf15407fz/scratch/denserr/trained/old/perturbed_msmarco-pas_random_24/checkpoint-500"
         model_confs = {
             "model_path": str(model_path),
             "tokenizer_name": "castorini/ance-msmarco-passage",
@@ -217,6 +269,16 @@ class LoadRetriever:
         }
         return self.__load_ance_parallel(model_confs, debug=debug)
 
+    def load_ance_random_5500(
+        self, use_pyterrier: bool = True, debug: bool = False
+    ) -> Retriever:
+        model_path = "/home/acf15407fz/scratch/denserr/trained/old/perturbed_msmarco-pas_random_24/checkpoint-5500"
+        model_confs = {
+            "model_path": str(model_path),
+            "tokenizer_name": "castorini/ance-msmarco-passage",
+        }
+        return self.__load_ance_parallel(model_confs, debug=debug)
+
     def load_dpr(self, use_pyterrier: bool = True, debug: bool = False) -> Retriever:
         encoder = DPRTextEncoder()
         retriever = PyTDenseRetriever(
@@ -236,29 +298,7 @@ class LoadRetriever:
             self.model_name,
             topk=10000,
             index_prefix="debug" if debug else "",
-            config={"bm25.b": 0.2, "bm25.k_1": 0.9},
-        )
-        return retriever
-
-    def load_bm25_robust04(self, debug: bool = False) -> BM25Retriever:
-        retriever = BM25Retriever.get_instance()
-        retriever.set_params(
-            self.dataset_name,
-            self.model_name,
-            topk=10000,
-            index_prefix="debug" if debug else "",
-            config={"bm25.b": 0.2, "bm25.k_1": 0.9},
-        )
-        return retriever
-
-    def load_bm25_msmarco_doc(self, debug: bool = False) -> BM25Retriever:
-        retriever = BM25Retriever.get_instance()
-        retriever.set_params(
-            self.dataset_name,
-            self.model_name,
-            topk=10000,
-            index_prefix="debug" if debug else "",
-            config={"bm25.b": 0.8, "bm25.k_1": 1.2},
+            config={"bm25.b": 0.4, "bm25.k_1": 0.9},
         )
         return retriever
 
@@ -317,7 +357,7 @@ class LoadRetriever:
             model_path, dataset_name, model_name, index_prefix="debug" if debug else ""
         )
 
-    def load_colbert_sent_w2(self, debug: bool = False) -> Retriever:
+    def _load_colbert_sent_w(self, window_size: int, debug: bool = False):
         from denserr.model.colbert_sent import ColbertSentRetriever
         import pyterrier as pt
 
@@ -332,10 +372,29 @@ class LoadRetriever:
             dataset_name,
             model_name,
             index_prefix="debug" if debug else "",
-            window_size=2,
+            window_size=window_size,
         )
 
-    def load_ptsplade(self, debug: bool = False) -> Retriever:
+    def load_colbert_sent_w2(self, debug: bool = False) -> Retriever:
+        return self._load_colbert_sent_w(2, debug=debug)
+
+    def load_colbert_sent_w5(self, debug: bool = False) -> Retriever:
+        return self._load_colbert_sent_w(5, debug=debug)
+
+    def load_splade(self) -> Retriever:
+        try:
+            from denserr.model.splade_model import SPLADERetriever
+        except ModuleNotFoundError as e:
+            logger.error("Failed to import SPLADERetriever ")
+            logger.error(
+                "It seems that splade env does not activated or python used is not for splade env"
+            )
+            raise e
+        retriever = SPLADERetriever.get_instance()
+        retriever.set_params(self.dataset_name, topk=10000)
+        return retriever
+
+    def load_ptsplade(self, debug: bool = False, device: str = "cuda:0") -> Retriever:
         try:
             import pyterrier as pt
 
@@ -350,7 +409,10 @@ class LoadRetriever:
             raise e
         retriever = PtSpladeRetriever.get_instance()
         retriever.set_params(
-            self.dataset_name, topk=10000, index_prefix="debug" if debug else ""
+            self.dataset_name,
+            topk=10000,
+            index_prefix="debug" if debug else "",
+            device=device,
         )
         return retriever
 
@@ -377,9 +439,15 @@ class LoadRetriever:
         self, model_path: str, debug: bool = False
     ) -> Retriever:
         try:
+            import pyterrier as pt
+
+            if not pt.started():
+                pt.init()
+
             from denserr.model.pt_splade_model_parallel import (
                 PtSpladeParallelRetriever,
             )
+
         except ModuleNotFoundError as e:
             logger.error("Failed to import PtSpladeRetriever ")
             logger.error(
@@ -480,18 +548,58 @@ class LoadRetriever:
     def load_ptsplade_sent_w25_parallel(self, debug: bool = False) -> Retriever:
         return self._load_ptsplade_sent_windowed_parallel(25, debug=debug)
 
+    def __load_contriever_parallel(
+        self, model_confs: Dict, debug: bool, topk: int = 10000
+    ) -> Retriever:
+        from denserr.model.pt_contriever import load_contriever
+
+        retriever = PyTParallelDenseRetriever(
+            load_contriever,
+            self.dataset_name,
+            self.model_name,
+            model_confs=model_confs,
+            index_prefix="debug" if debug else "",
+            topk=topk,
+            segment_size=1_000_000,
+            overwrite=False,
+        )
+        return retriever
+
+    def load_contriever_parallel(
+        self, debug: bool = False, topk: int = 10000
+    ) -> Retriever:
+        return self.__load_contriever_parallel({}, debug=debug, topk=topk)
+
+    def load_contriever(self, debug: bool = False) -> Retriever:
+        from denserr.model.pt_contriever import ContrieverEncoder
+
+        encoder = ContrieverEncoder()
+        retriever = PyTDenseRetriever(
+            encoder,
+            self.dataset_name,
+            self.model_name,
+            index_prefix="debug" if debug else "",
+            topk=10000,
+            segment_size=1_000_000,
+        )
+        return retriever
+
     def load_retriever(
         self,
         use_pyterrier: bool = True,
         debug: bool = False,
         topk: int = 10000,
+        overwrite: bool = False,
+        device: str = "cuda:0",
     ) -> Retriever:
         if self.model_name == "ance":
             retriever: Retriever = self.load_ance(
                 use_pyterrier=use_pyterrier, debug=debug
             )
         elif self.model_name == "ance-parallel":
-            retriever = self.load_ance_parallel(debug=debug, topk=topk)
+            retriever = self.load_ance_parallel(
+                debug=debug, topk=topk, overwrite=overwrite
+            )
         elif self.model_name == "ance-sent":
             retriever = self.load_ance_sent(debug=debug)
         elif self.model_name == "ance-sent-w2":
@@ -532,6 +640,14 @@ class LoadRetriever:
             retriever = self.load_ance_random_mse_if_less_2000(debug=debug)
         elif self.model_name == "ance-random-wo-part-500":
             retriever = self.load_ance_random_wo_pert_500(debug=debug)
+        elif self.model_name == "ance-distil-w1-500":
+            retriever = self.load_distil_ance_parallel_500(debug=debug)
+        elif self.model_name == "ance-distil-w1-4000":
+            retriever = self.load_distil_ance_parallel_4000(debug=debug)
+        elif self.model_name == "ance-distil-w5":
+            retriever = self.load_distil_w5_ance_parallel(debug=debug)
+        elif self.model_name == "ance-distil-w5-500":
+            retriever = self.load_distil_w5_ance_parallel_checkpoint(500, debug=debug)
         elif self.model_name == "dpr":
             retriever = self.load_dpr(use_pyterrier=use_pyterrier, debug=debug)
         elif self.model_name == "colbert":
@@ -542,12 +658,12 @@ class LoadRetriever:
             retriever = self.load_colbert_sent_w2(
                 debug=debug,
             )
+        elif self.model_name == "colbert-sent-w5":
+            retriever = self.load_colbert_sent_w5(
+                debug=debug,
+            )
         elif self.model_name == "bm25":
             retriever = self.load_bm25(debug=debug)
-        elif self.model_name == "bm25-robust04":
-            retriever = self.load_bm25_robust04(debug=debug)
-        elif self.model_name == "bm25-msmarco-doc":
-            retriever = self.load_bm25_msmarco_doc(debug=debug)
         elif self.model_name == "deepct":
             retriever = self.load_deepct(debug=debug)
         elif self.model_name == "deepct-sent":
@@ -557,7 +673,7 @@ class LoadRetriever:
         elif self.model_name == "splade":
             retriever = self.load_splade()
         elif self.model_name == "ptsplade":
-            retriever = self.load_ptsplade(debug=debug)
+            retriever = self.load_ptsplade(debug=debug, device=device)
         elif self.model_name == "ptsplade-parallel":
             retriever = self.load_ptsplade_parallel(debug=debug)
         elif self.model_name == "ptsplade-parallel-500":
@@ -588,6 +704,10 @@ class LoadRetriever:
             retriever = self.load_ptsplade_sent_w20_parallel(debug=debug)
         elif self.model_name == "ptsplade-sent-w25-parallel":
             retriever = self.load_ptsplade_sent_w25_parallel(debug=debug)
+        elif self.model_name == "contriever":
+            retriever = self.load_contriever(debug=debug)
+        elif self.model_name == "contriever-parallel":
+            retriever = self.load_contriever_parallel(debug=debug)
         else:
             raise ValueError(f"Unknown model: {self.model_name}")
         return retriever

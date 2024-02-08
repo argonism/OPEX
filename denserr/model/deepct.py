@@ -14,7 +14,8 @@ from denserr.model._base import Retriever
 logger = getLogger(__name__)
 
 try:
-    pt.init(mem=300_000)
+    if not pt.started():
+        pt.init(mem=300_000)
     from pyterrier_deepct import DeepCT, Toks2Text
 except ModuleNotFoundError:
     logger.warning(
@@ -30,7 +31,7 @@ class DeepctRetriever(Retriever):
 
     @classmethod
     def get_instance(cls) -> DeepctRetriever:
-        print("++++++++++++ not pt.started() ++++++++++++")
+        print("++++++++++++ get_instance() ++++++++++++")
         if cls._instance is None:
             print("cls._instance is None")
             if not pt.started():
@@ -49,25 +50,26 @@ class DeepctRetriever(Retriever):
         self.topk = topk
         self.deepct = DeepCT()
         self.tokenizer = self.deepct.tokenizer
+        self.dataset_name = dataset_name
 
     def get_textscorer(self) -> pt.batchretrieve.TextScorer:
-        # if not hasattr(self, "_textscorer"):
-        print(":::::::::: get_textscorer :::::::::::::")
-        print(f"self.index_path: {self.index_path}")
-        print(":::::::::::::::::::::::::::::::::::::::")
-        textscorer = (
-            self.deepct
-            >> Toks2Text()
-            >> pt.text.scorer(
-                takes="docs",
-                body_attr="text",
-                wmodel="BM25",
-                background_index=str(self.index_path),
+        if not hasattr(self, "_textscorer") or self._textscorer is None:
+            print(":::::::::: get_textscorer :::::::::::::")
+            print(f"self.index_path: {self.index_path}")
+            print(":::::::::::::::::::::::::::::::::::::::")
+            textscorer = (
+                self.deepct
+                >> Toks2Text()
+                >> pt.text.scorer(
+                    takes="docs",
+                    body_attr="text",
+                    wmodel="BM25",
+                    background_index=str(self.index_path),
+                )
             )
-        )
-        # self._textscorer = textscorer
-        # return self._textscorer
-        return textscorer
+            # return textscorer
+            self._textscorer = textscorer
+        return self._textscorer
 
     def load_indexref(self) -> Optional[str]:
         if not hasattr(self, "index_path"):
@@ -84,11 +86,10 @@ class DeepctRetriever(Retriever):
         indexer = (
             self.deepct
             >> Toks2Text()
-            >> pt.index.IterDictIndexer(
-                str(self.index_path), threads=16, blocks=True, overwrite=True
-            )
+            >> pt.index.IterDictIndexer(str(self.index_path), overwrite=True)
         )
         indexref = indexer.index(corpus_iter)
+        return indexref
 
     def query_preprocess(self, query: str) -> str:
         code = re.compile(
@@ -113,9 +114,14 @@ class DeepctRetriever(Retriever):
         queries: Dict[str, str],
         **kwargs: Dict[Any, Any],
     ) -> Dict[str, Dict[str, float]]:
-        self.indexing(
-            self.corpus_iter(corpus),
-        )
+        indexref = self.load_indexref()
+        if indexref is None:
+            logger.info(
+                f":::::::::::: No index found at {self.index_path}. Indexing ... ::::::::::::"
+            )
+            indexref = self.indexing(
+                self.corpus_iter(corpus),
+            )
         topics = pd.DataFrame.from_dict(
             {"qid": queries.keys(), "query": queries.values()}
         )

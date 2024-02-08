@@ -162,37 +162,81 @@ class SentenceAnalysisStatTester(object):
 
 def main():
     dataset_test_models = {
+        # "robust04": {
+        #     "ance": [
+        #         "ance-sent",
+        #         "ance-sent-w5",
+        #         "ance-sent-w10",
+        #         "ance-sent-w15",
+        #         "ance-sent-w20",
+        #     ],
+        #     "ptsplade": [
+        #         "ptsplade-sent-parallel",
+        #         "ptsplade-sent-w5-parallel",
+        #         "ptsplade-sent-w10-parallel",
+        #         "ptsplade-sent-w15-parallel",
+        #         "ptsplade-sent-w20-parallel",
+        #     ],
+        # },
+        # "msmarco-doc": {
+        #     "ance": [
+        #         "ance-sent",
+        #         "ance-sent-w5",
+        #         "ance-sent-w10",
+        #         "ance-sent-w15",
+        #         "ance-sent-w20",
+        #     ],
+        #     "ptsplade": [
+        #         "ptsplade-sent-parallel",
+        #         "ptsplade-sent-w5-parallel",
+        #         "ptsplade-sent-w10-parallel",
+        #         "ptsplade-sent-w15-parallel",
+        #         "ptsplade-sent-w20-parallel",
+        #     ],
+        # },
+        # "dl19-doc": {
+        #     "ance": [
+        #         "ance-sent",
+        #         "ance-sent-w5",
+        #         "ance-sent-w10",
+        #         "ance-sent-w15",
+        #         "ance-sent-w20",
+        #     ],
+        #     "ptsplade": [
+        #         "ptsplade-sent-parallel",
+        #         "ptsplade-sent-w5-parallel",
+        #         "ptsplade-sent-w10-parallel",
+        #         "ptsplade-sent-w15-parallel",
+        #         "ptsplade-sent-w20-parallel",
+        #     ],
+        # },
+        # "dl20-doc": {
+        #     "ance": [
+        #         "ance-sent",
+        #         "ance-sent-w5",
+        #         "ance-sent-w10",
+        #         "ance-sent-w15",
+        #         "ance-sent-w20",
+        #     ],
+        #     "ptsplade": [
+        #         "ptsplade-sent-parallel",
+        #         "ptsplade-sent-w5-parallel",
+        #         "ptsplade-sent-w10-parallel",
+        #         "ptsplade-sent-w15-parallel",
+        #         "ptsplade-sent-w20-parallel",
+        #     ],
+        # },
         "robust04": {
-            "ance": [
-                "ance-sent",
-                "ance-sent-w5",
-                "ance-sent-w10",
-                "ance-sent-w15",
-                "ance-sent-w20",
-            ],
-            "ptsplade": [
-                "ptsplade-sent-parallel",
-                "ptsplade-sent-w5-parallel",
-                "ptsplade-sent-w10-parallel",
-                "ptsplade-sent-w15-parallel",
-                "ptsplade-sent-w20-parallel",
-            ],
+            "bm25": ["ance", "colbert", "deepct", "ptsplade"],
         },
         "msmarco-doc": {
-            "ance": [
-                "ance-sent",
-                "ance-sent-w5",
-                "ance-sent-w10",
-                "ance-sent-w15",
-                "ance-sent-w20",
-            ],
-            "ptsplade": [
-                "ptsplade-sent-parallel",
-                "ptsplade-sent-w5-parallel",
-                "ptsplade-sent-w10-parallel",
-                "ptsplade-sent-w15-parallel",
-                "ptsplade-sent-w20-parallel",
-            ],
+            "bm25": ["ance", "colbert", "deepct", "ptsplade"],
+        },
+        "dl19-doc": {
+            "bm25": ["ance", "colbert", "deepct", "ptsplade"],
+        },
+        "dl20-doc": {
+            "bm25": ["ance", "colbert", "deepct", "ptsplade"],
         },
     }
 

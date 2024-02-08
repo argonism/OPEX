@@ -12,10 +12,11 @@ import luigi
 from tqdm import tqdm
 from scipy import stats
 import statsmodels.stats.multitest as multi
+from mdfy import MdTable
 
 sys.path.append(str(Path(__file__).parent.parent))
-from denserr.retrieve import EvaluatePerQuery
-from denserr.utils.to_markdown import MdTable
+from denserr.retrieve import EvaluatePerQuery, Evaluate
+
 from denserr.utils.util import cache_dir, IterCacher, project_dir, write_json_to_file
 from scripts.analyze_rankshift import ConfigGenerator
 
@@ -33,7 +34,7 @@ class IRMetricsStatTester(object):
         for k, v in config.items():
             luigi.configuration.get_config().set(config_key, k, str(v))
 
-    def get_ir_metrics_result(self, config) -> Tuple:
+    def get_ir_metrics_by_query_result(self, config) -> Tuple:
         result = gokart.build(
             EvaluatePerQuery(rerun=False),
             return_value=True,
@@ -41,12 +42,24 @@ class IRMetricsStatTester(object):
         )
         return result
 
-    def get_model_metrics(self, dataset_name: str, model_name: str) -> Dict:
+    def get_ir_metrics_result(self, config) -> Tuple:
+        result = gokart.build(
+            Evaluate(rerun=False),
+            return_value=True,
+            log_level=logging.ERROR,
+        )
+        return result
+
+    def get_model_metrics(
+        self, dataset_name: str, model_name: str
+    ) -> Tuple[Dict, Dict]:
         config = self.base_config
         config["dataset_name"] = dataset_name
         config["model_name"] = model_name
         self.set_config(config)
-        return self.get_ir_metrics_result(config)
+        return self.get_ir_metrics_by_query_result(config), self.get_ir_metrics_result(
+            config
+        )
 
     def test_one_pair_one_metrics(
         self, base_result: Dict, target_result: Dict
@@ -74,13 +87,20 @@ class IRMetricsStatTester(object):
         self, dataset_name: str, test_models: Dict[str, List[str]]
     ) -> Dict[str, Dict[str, Dict[str, str]]]:
         test_results = defaultdict(lambda: defaultdict(list))
+        metrics_matrixes = {}
         for base_model in test_models:
             print("base_model:", base_model)
             # Collect ir metrics evaluation results
-            base_result_metrics = self.get_model_metrics(dataset_name, base_model)
+            base_result_metrics, base_metrics_matrix = self.get_model_metrics(
+                dataset_name, base_model
+            )
+            metrics_matrixes[base_model] = base_metrics_matrix
             taget_results_metrics = defaultdict(list)
             for target_model in test_models[base_model]:
-                target_result = self.get_model_metrics(dataset_name, target_model)
+                target_result, target_matrix = self.get_model_metrics(
+                    dataset_name, target_model
+                )
+                metrics_matrixes[target_model] = target_matrix
                 for metric in target_result:
                     taget_results_metrics[metric].append(
                         (target_model, target_result[metric])
@@ -124,11 +144,11 @@ class IRMetricsStatTester(object):
                 model: reject for model, reject in zip(models, rejects)
             }
 
-        return adjusted_result
+        return adjusted_result, metrics_matrixes
 
 
 def main():
-    datasets = ["robust04", "msmarco-doc"]
+    datasets = ["robust04", "msmarco-doc", "dl19-doc", "dl20-doc"]
     test_models = {
         "ptsplade": [
             "ptsplade-sent-parallel",
@@ -149,28 +169,39 @@ def main():
     output_dir = project_dir.joinpath("scripts", "IRMetricsStatTest")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    labels_for_paper = [""]
+    table_for_paper = []
+    target_metric = "NDCG@100"
+
     tester = IRMetricsStatTester()
     for dataset in datasets:
         output_path = output_dir.joinpath(f"{dataset}.json")
         print(f"## {dataset}")
-        result = tester.test_all_metrics(dataset, test_models)
-        # output_path.write_text(json.dumps(result, ensure_ascii=False))
+        result, metrics_matrixes = tester.test_all_metrics(dataset, test_models)
         logger.info(f"writeout to {output_path}")
 
-        pvalue_result = defaultdict(dict)
+        labels_for_paper.append(dataset)
+
+        metrics_labels = ["Model"]
+        model_metrics = []
         for metric in result:
-            print(f"### {metric}", "\n")
-            metric_result = result[metric]
-            for model in metric_result:
-                if model == "reject":
-                    markdown = MdTable(result[metric][model], precision=3)
-                    print(markdown, "\n")
-                else:
-                    pvalue = result[metric][model]["pvalue"]
-                    pvalue_result[metric][model] = pvalue
-        markdown = MdTable(pvalue_result, precision=3)
+            reject_status = result[metric].pop("reject")
+            metrics_labels.append(metric)
+            model_metrics_values = {}
+            for model in metrics_matrixes:
+                metric_value = metrics_matrixes[model][metric]
+                is_rejected = model in reject_status and reject_status[model]
+                metrics_with_judge = f"{metric_value:.3f}{'*' if is_rejected else ''}"
+                model_metrics_values[model] = metrics_with_judge
+
+            if metric == target_metric:
+                table_for_paper.append(model_metrics_values)
+            model_metrics.append(model_metrics_values)
+
+        markdown = MdTable(model_metrics, transpose=True, labels=metrics_labels)
         print(markdown, "\n")
 
-
+    markdown = MdTable(table_for_paper, transpose=True, labels=labels_for_paper)
+    print(markdown, "\n")
 if __name__ == "__main__":
     main()

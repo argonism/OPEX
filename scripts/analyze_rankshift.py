@@ -6,7 +6,7 @@ import configparser
 from collections import defaultdict
 from logging import getLogger
 from pathlib import Path
-from typing import Dict, Generator, List, Optional, Tuple, Union
+from typing import Dict, Generator, List, Optional, Tuple, Union, Any
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
@@ -22,6 +22,8 @@ from nltk.stem import PorterStemmer, WordNetLemmatizer
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from scipy import stats
+from sklearn.preprocessing import minmax_scale
+from mdfy import MdTable
 
 sys.path.append(str(Path(__file__).parent.parent))
 from denserr.analyzer.damaged_analyzer import DamagedAnalyze
@@ -30,7 +32,9 @@ from denserr.analyzer.distribution_visualizer import DistributionVisualizer
 from denserr.retrieve import Retrieve
 from denserr.dataset._base import PolarsCorpusLoader
 from denserr.dataset.load_dataset import LoadDataset
-from denserr.utils.to_markdown import MDFY
+from denserr.model.deepct import DeepctRetriever
+
+# from denserr.utils.to_markdown import MDFY
 from denserr.utils.util import cache_dir, IterCacher, project_dir, write_json_to_file
 
 from sentence_transformers import SentenceTransformer, util
@@ -38,33 +42,50 @@ from sentence_transformers import SentenceTransformer, util
 logger = getLogger(__name__)
 
 
-class SentenceSimilarity:
+class CompareElement(object):
+    element_name = "compare_element"
+
+    def calc(
+        self,
+        docids: List[str] = None,
+        docs: List[str] = None,
+        query: str = None,
+        sents: List[str] = None,
+        positions: List[int] = None,
+        qrels: List[int] = None,
+    ) -> List[Any]:
+        ...
+
+    def run(self, **kwargs):
+        return self.calc(**kwargs)
+
+
+class SentenceSimilarity(CompareElement):
+    element_name = "sentence_sim"
+
     def __init__(self, device: str = "cuda"):
         model_name = "all-mpnet-base-v2"
         self.model = SentenceTransformer(model_name, device=device)
 
-    def similarity(self, sent: str, doc: str) -> float:
-        query_embedding = self.model.encode(sent)
-        passage_embedding = self.model.encode(doc)
-
-        return util.dot_score(query_embedding, passage_embedding)
-
-    def similarities_list(self, sent: List[str], doc: List[str]) -> List[float]:
-        query_embedding = self.model.encode(sent)
-        passage_embedding = self.model.encode(doc)
+    def calc(self, *, docs: List[str], sents: List[str], **kwargs) -> List[Any]:
+        query_embedding = self.model.encode(sents)
+        passage_embedding = self.model.encode(docs)
 
         cosine_scores = util.cos_sim(query_embedding, passage_embedding)
 
         scores = []
-        for i in range(len(sent)):
+        for i in range(len(sents)):
             score = cosine_scores[i][i]
             scores.append(float(score))
         return scores
 
 
-class PosIdentifier:
-    def __init__(self, corpus: Optional[PolarsCorpusLoader] = None):
+class PosIdentifier(CompareElement):
+    element_name = "pos"
+
+    def __init__(self, corpus: Optional[PolarsCorpusLoader], is_intact: bool) -> None:
         self.corpus = corpus
+        self.is_intact = is_intact
 
     def damaged(self, docid: str, perturbation: str) -> Optional[int]:
         doc = self.corpus[docid]
@@ -75,8 +96,6 @@ class PosIdentifier:
             sent = sent.lower().replace("\n", "").replace(" ", "")
             if perturbation in sent:
                 return i
-        # print("(doc[text]:", text)
-        # print("perturbation:", perturbation)
         return None
 
     def intact(self, perturbed: str, perturbation: str) -> Optional[int]:
@@ -90,16 +109,125 @@ class PosIdentifier:
                 return i
         return None
 
+    def calc(self, positions: List[str], **kwargs) -> List[Any]:
+        return positions
 
-class ANCEScore:
-    def __init__(self):
-        from denserr.model.ance import AnceTextEncoder
 
-        self.ance_encoder = AnceTextEncoder()
+class QuerySentScore(CompareElement):
+    element_name = "qs_score"
 
-    def score(self, query: str, docs: List[str]) -> List[float]:
-        query_emb = self.ance_encoder.encode_queries([query])
-        doc_emb = self.ance_encoder.encode_corpus(docs)
+    def __init__(
+        self, model_name: str, dataset_name: str, device: str = "cuda"
+    ) -> None:
+        from denserr.model.load_model import LoadRetriever
+
+        self.model = LoadRetriever(dataset_name, model_name).load_retriever(
+            device=device
+        )
+
+        if "deepct" in model_name:
+            if not dataset_name == self.model.dataset_name:
+                self.model.set_params(dataset_name)
+                self.model._textscorer = None
+                logger.info("DeepCT reinitialize")
+                return
+
+    @classmethod
+    def preprocess(cls, lt, ge) -> Tuple:
+        all_scores = lt[cls.element_name] + ge[cls.element_name]
+        min_, max_ = min(all_scores), max(all_scores)
+        norm_lt = map(lambda e: (e - min_) / (max_ - min_), lt[cls.element_name])
+        norm_ge = map(lambda e: (e - min_) / (max_ - min_), ge[cls.element_name])
+        lt[cls.element_name] = list(norm_lt)
+        ge[cls.element_name] = list(norm_ge)
+        return lt, ge
+
+    def calc(self, query: str, sents: List[str], **kwargs) -> List[Any]:
+        if hasattr(self.model, "batch_single_doc_score"):
+            queries = [query] * len(sents)
+            scores = self.model.batch_single_doc_score(queries, sents)
+            scores = list(scores)
+        else:
+            scores = []
+            for sent in sents:
+                score = self.model.single_doc_score(query, sent)
+                scores.append(score)
+        return scores
+
+
+def text_to_normalized_tokens(text, use_stemming=True):
+    text = text.lower()
+
+    tokenizer = RegexpTokenizer(r"\w+")
+    tokens = tokenizer.tokenize(text)
+
+    stop_words = set(stopwords.words("english"))
+    tokens = [token for token in tokens if token not in stop_words]
+
+    if use_stemming:
+        stemmer = PorterStemmer()
+        tokens = [stemmer.stem(token) for token in tokens]
+    else:
+        lemmatizer = WordNetLemmatizer()
+        tokens = [lemmatizer.lemmatize(token) for token in tokens]
+
+    return tokens
+
+
+class JaccardDistance(CompareElement):
+    element_name = "jaccard_dist"
+
+    def calc(self, docs: List[str], sents: List[str], **kwargs) -> List[Any]:
+        jaccard_dists = []
+        for doc, sentence in zip(docs, sents):
+            sentence_tokens = set(text_to_normalized_tokens(sentence))
+            doc_tokens = set(text_to_normalized_tokens(doc))
+
+            union = len(sentence_tokens.union(doc_tokens))
+            if union <= 0:
+                return (0, 0, 0, 0)
+            jaccard_distance = len(sentence_tokens.intersection(doc_tokens)) / union
+            jaccard_dists.append(jaccard_distance)
+
+        return jaccard_dists
+
+
+class WordOverwrap(CompareElement):
+    element_name = "word_overwrap"
+
+    def added_sentence_word_overwrap(self, sentence: str, doc: str) -> float:
+        sentence_tokens = set(text_to_normalized_tokens(sentence))
+        doc_tokens = set(text_to_normalized_tokens(doc))
+        overwrap_num = len([w for w in sentence if w in doc_tokens])
+
+        return overwrap_num
+
+    def calc(self, docs: List[str], sents: List[str], **kwargs) -> List[Any]:
+        return [
+            self.added_sentence_word_overwrap(sent, doc)
+            for doc, sent in zip(docs, sents)
+        ]
+
+
+class AddedSentencesLength(CompareElement):
+    element_name = "normed_sentence_lengthes"
+
+    def calc(self, sents: List[str], **kwargs) -> List[Any]:
+        return [len(set(text_to_normalized_tokens(sent))) for sent in sents]
+
+
+class DocsLength(CompareElement):
+    element_name = "normed_damaged_lens"
+
+    def calc(self, docs: List[str], **kwargs) -> List[Any]:
+        return [len(set(text_to_normalized_tokens(doc))) for doc in docs]
+
+
+class CompareQrels(CompareElement):
+    element_name = "qrel"
+
+    def calc(self, qrels: List[str], **kwargs) -> List[Any]:
+        return qrels
 
 
 class ConfigGenerator(object):
@@ -128,38 +256,73 @@ class ConfigGenerator(object):
                 yield base_config
 
 
-class WordOverwrap(object):
-    def __init__(self) -> None:
-        pass
+class CompareElementManager(object):
+    def __init__(
+        self, compare_elements: List[CompareElement], qrels: Dict[str, Dict[str, int]]
+    ) -> None:
+        self.compare_elements = compare_elements
+        self.qrels = qrels
 
-    def text_to_normalized_tokens(self, text, use_stemming=True):
-        text = text.lower()
-
-        tokenizer = RegexpTokenizer(r"\w+")
-        tokens = tokenizer.tokenize(text)
-
-        stop_words = set(stopwords.words("english"))
-        tokens = [token for token in tokens if token not in stop_words]
-
-        if use_stemming:
-            stemmer = PorterStemmer()
-            tokens = [stemmer.stem(token) for token in tokens]
+    def get_qrel_if_exist_else_0(self, qid, docid) -> int:
+        if qid in self.qrels and docid in self.qrels[qid]:
+            return self.qrels[qid][docid]
         else:
-            lemmatizer = WordNetLemmatizer()
-            tokens = [lemmatizer.lemmatize(token) for token in tokens]
+            return 0
 
-        return tokens
+    def execute(
+        self,
+        part_result,
+        retrieval_result,
+        queries_table: Dict[str, str],
+        skip_rs_lt: Optional[int] = None,
+        skip_rs_ge: Optional[int] = None,
+        is_intact: bool = False,
+        min_qrel: int = 0,
+    ):
+        execute_result = defaultdict(list)
+        for qid, qid_result in tqdm(part_result, "comp_elem calculation"):
+            query = queries_table[qid]
+            ranking = sorted(
+                retrieval_result[qid].items(), key=lambda x: x[1], reverse=True
+            )
+            sents, docs, docids, positions, qrels = [], [], [], [], []
+            for (
+                new_rank,
+                orig_rank,
+                perturbed_score,
+                damaged,
+                perturbation,
+                position,
+            ) in qid_result:
+                doc_id, score = ranking[orig_rank]
+                qrel = self.get_qrel_if_exist_else_0(qid, doc_id)
+                rank_shift = new_rank - orig_rank if is_intact else orig_rank - new_rank
+                if skip_rs_lt is not None and rank_shift < skip_rs_lt:
+                    continue
+                if skip_rs_ge is not None and rank_shift >= skip_rs_ge:
+                    continue
+                if qrel < min_qrel:
+                    continue
 
-    def added_sentence_word_overwrap(self, sentence: str, doc: str) -> float:
-        sentence_tokens = set(self.text_to_normalized_tokens(sentence))
-        doc_tokens = set(self.text_to_normalized_tokens(doc))
-        overwrap_num = len([w for w in sentence if w in doc_tokens])
-        union = len(sentence_tokens.union(doc_tokens))
-        if union <= 0:
-            return (0, 0, 0, 0)
-        jaccard_distance = len(sentence_tokens.intersection(doc_tokens)) / union
+                sents.append(perturbation)
+                docs.append(damaged)
+                docids.append(doc_id)
+                positions.append(position)
+                qrels.append(qrel)
 
-        return overwrap_num, jaccard_distance, len(sentence_tokens), len(doc_tokens)
+            if len(sents) > 0:
+                for comp_elem in self.compare_elements:
+                    results = comp_elem.run(
+                        docids=docids,
+                        docs=docs,
+                        query=query,
+                        sents=sents,
+                        positions=positions,
+                        qrels=qrels,
+                    )
+                    execute_result[comp_elem.element_name] += results
+
+        return execute_result
 
 
 def parallel_analyze(
@@ -167,69 +330,36 @@ def parallel_analyze(
     part_result,
     retrieval_result,
     pos_identifier,
+    model_name: str,
+    dataset_name: str,
+    queries_table: Dict[str, str],
+    qrels: Dict[str, Dict[str, float]],
     skip_rs_lt: Optional[int] = None,
     skip_rs_ge: Optional[int] = None,
     is_intact: bool = False,
+    min_qrel: int = 0,
 ):
-    sent_sim_calc = SentenceSimilarity(device=f"cuda:{i}")
-    word_overwrap = WordOverwrap()
+    cuda_device = f"cuda:{i}"
+    compare_elements = [
+        SentenceSimilarity(device=cuda_device),
+        JaccardDistance(),
+        QuerySentScore(model_name, dataset_name, device=cuda_device),
+        AddedSentencesLength(),
+        pos_identifier,
+        CompareQrels(),
+        DocsLength(),
+    ]
+    manager = CompareElementManager(compare_elements, qrels)
+
     part_result = list(part_result)
-
-    similarities = []
-    overwraps = []
-    poses = []
-    normed_sentence_lengthes = []
-    normed_damaged_lens = []
-    jaccard_list = []
-    for qid, qid_result in tqdm(part_result):
-        ranking = sorted(
-            retrieval_result[qid].items(), key=lambda x: x[1], reverse=True
-        )
-        sents, docs = [], []
-        for (
-            new_rank,
-            orig_rank,
-            perturbed_score,
-            damaged,
-            perturbation,
-        ) in qid_result:
-            doc_id, score = ranking[orig_rank]
-            rank_shift = new_rank - orig_rank if is_intact else orig_rank - new_rank
-            if skip_rs_lt is not None and rank_shift < skip_rs_lt:
-                continue
-            if skip_rs_ge is not None and rank_shift >= skip_rs_ge:
-                continue
-
-            (
-                num_overwrap,
-                jaccard,
-                sent_len,
-                damaged_len,
-            ) = word_overwrap.added_sentence_word_overwrap(perturbation, damaged)
-            pos = (
-                pos_identifier.intact(damaged, perturbation)
-                if is_intact
-                else pos_identifier.damaged(doc_id, perturbation)
-            )
-            poses.append(pos)
-            if pos is None:
-                print(f"pos not found! {orig_rank} -> {new_rank} ({qid}, {doc_id})")
-            overwraps.append(num_overwrap)
-            jaccard_list.append(jaccard)
-            normed_sentence_lengthes.append(sent_len)
-            normed_damaged_lens.append(damaged_len)
-            sents.append(perturbation)
-            docs.append(damaged)
-
-        sims = sent_sim_calc.similarities_list(sents, docs)
-        similarities += sims
-    return (
-        similarities,
-        overwraps,
-        [pos for pos in poses if pos is not None],
-        normed_sentence_lengthes,
-        normed_damaged_lens,
-        jaccard_list,
+    return manager.execute(
+        part_result,
+        retrieval_result,
+        queries_table,
+        skip_rs_lt,
+        skip_rs_ge,
+        is_intact,
+        min_qrel,
     )
 
 
@@ -267,19 +397,20 @@ class RankshiftAnalyzer(object):
         )
         return result
 
-    def load_corpus(self, dataset_name: int) -> PolarsCorpusLoader:
-        corpus, _, _ = gokart.build(
+    def load_dataset(self, dataset_name: int) -> Tuple[PolarsCorpusLoader, Dict, Dict]:
+        corpus, queries, qrels = gokart.build(
             LoadDataset(rerun=False),
             return_value=True,
             log_level=logging.ERROR,
         )
-        return corpus
+        return corpus, queries, qrels
 
     def analyze(
         self,
         dataset_name: str,
         model_name: str,
         intact_context: str = "corpus",
+        min_qrel: int = 0,
     ) -> Dict[str, List[Union[float, int]]]:
         config = self.base_config
         config["dataset_name"] = dataset_name
@@ -303,10 +434,10 @@ class RankshiftAnalyzer(object):
         )
 
         bm25_result = self.get_bm25_result(dataset_name)
-        corpus = self.load_corpus(dataset_name).to_dict()
-        pos_identifier = PosIdentifier(None if self.is_intact else corpus)
+        corpus, queries, qrels = self.load_dataset(dataset_name)
+        corpus = corpus.to_dict()
+        pos_identifier = PosIdentifier(corpus, self.is_intact)
         retrieval_result = retrival_result
-        evaluated_result = defaultdict(list)
         futures = []
         items = result.items()
         with ProcessPoolExecutor(
@@ -324,31 +455,22 @@ class RankshiftAnalyzer(object):
                     part_result,
                     retrieval_result,
                     pos_identifier,
+                    model_name,
+                    dataset_name,
+                    queries,
+                    qrels,
                     skip_rs_lt=self.skip_rs_lt,
                     skip_rs_ge=self.skip_rs_ge,
                     is_intact=self.is_intact,
+                    min_qrel=min_qrel,
                 )
                 futures.append(future)
 
-        for future in tqdm(
-            as_completed(futures), desc="waiting futures", total=len(futures)
-        ):
-            (
-                part_similarities,
-                part_overwraps,
-                part_poses,
-                part_normed_sentence_lengthes,
-                part_normed_damaged_lens,
-                part_jaccard_list,
-            ) = future.result()
-            evaluated_result["similarities"] += part_similarities
-            evaluated_result["overwraps"] += part_overwraps
-            evaluated_result["sentence poses"] += part_poses
-            evaluated_result[
-                "normed_sentence_lengthes"
-            ] += part_normed_sentence_lengthes
-            evaluated_result["normed_damaged_lens"] += part_normed_damaged_lens
-            evaluated_result["jaccard_list"] += part_jaccard_list
+        evaluated_result = defaultdict(list)
+        for future in as_completed(futures):
+            result = future.result()
+            for k, v in result.items():
+                evaluated_result[k] += v
 
         return evaluated_result
 
@@ -422,15 +544,14 @@ if __name__ == "__main__":
             intact_context=intact_context,
         )
 
-    def merge_dicts(dict_list: List[Dict]) -> Dict:
-        merged_dict = {key: [] for key in dict_list[0]}
+    def concat_dict_lists(dict_list: List[Dict]) -> Dict:
+        merged_dict = defaultdict(list)
         for dic in dict_list:
             for metric in dic:
                 merged_dict[metric] += dic[metric]
         return merged_dict
 
-    datasets = ["robust04", "msmarco-doc"]
-    # datasets = ["robust04"]
+    datasets = ["robust04", "msmarco-doc", "dl19-doc", "dl20-doc"]
     models = [
         "ance",
         "colbert",
@@ -440,28 +561,32 @@ if __name__ == "__main__":
     is_intact = False
     intact_context = "corpus"
     skip_rs_threshold = 100
-    max_workers = 4
+    min_qrel = 0
+    max_workers = 1
 
-    extra = f"intact/{intact_context}" if is_intact else "damaged"
+    analysis_setting = f"intact/{intact_context}" if is_intact else "damaged"
+    extra = f"{skip_rs_threshold}_{min_qrel}"
 
-    output_dir = project_dir.joinpath("scripts", "AnalyzeRankshift", extra)
-    cache_base_path = cache_dir.joinpath("RankshiftAnalyzer", extra)
-    cacher = IterCacher(
-        cache_base_path, cache_strategy="each_file", key_gen_method="hash"
+    output_dir = project_dir.joinpath(
+        "scripts", "AnalyzeRankshift", analysis_setting, extra
     )
+    logger.info(f"output dir: {output_dir}")
 
-    all_result = defaultdict(lambda: defaultdict(dict))
+    all_lt_results, all_ge_results = [], []
     for dataset in datasets:
-        print(f"## {dataset}")
+        print(f"## {dataset}\n")
+        dataset_output_path = output_dir.joinpath(dataset)
 
-        dataset_lt_results = []
-        dataset_ge_results = []
+        model_lt_results = []
+        model_ge_results = []
         for model in models:
-            print(f"### {model}")
-            rs_lt_result_key = f"{dataset}_{model}_rs_<_{skip_rs_threshold}"
-            rs_lt_result = cacher.load(rs_lt_result_key)
-            if rs_lt_result is None:
-                print(f"cache ({rs_lt_result_key}) not found")
+            model_output_path = dataset_output_path.joinpath(model)
+            rs_lt_result_path = model_output_path.joinpath("rs_lt_result.json")
+            rs_ge_result_path = model_output_path.joinpath("rs_ge_result.json")
+
+            if rs_lt_result_path.exists():
+                rs_lt_result = json.loads(rs_lt_result_path.read_text())
+            else:
                 rs_lt_result = analyze(
                     dataset,
                     model,
@@ -471,12 +596,10 @@ if __name__ == "__main__":
                     intact_context,
                     max_workers,
                 )
-                cacher.cache(rs_lt_result, rs_lt_result_key)
 
-            rs_ge_result_key = f"{dataset}_{model}_rs_>=_{skip_rs_threshold}"
-            rs_ge_result = cacher.load(rs_ge_result_key)
-            if rs_ge_result is None:
-                print(f"cache ({rs_ge_result_key}) not found")
+            if rs_ge_result_path.exists():
+                rs_ge_result = json.loads(rs_ge_result_path.read_text())
+            else:
                 rs_ge_result = analyze(
                     dataset,
                     model,
@@ -486,62 +609,51 @@ if __name__ == "__main__":
                     intact_context,
                     max_workers,
                 )
-                cacher.cache(rs_ge_result, rs_ge_result_key)
 
-            # dataset_whole_results.append(whole_result)
-            # dataset_rs100_results.append(rs100_result)
-
-            # all_whole_result = merge_dicts(dataset_whole_results)
-            # all_rs100_result = merge_dicts(dataset_rs100_results)
-            # these result are dict that has structure like
-            # (all_whole_result / all_rs100_result) = {
-            #     "similarities": [0.2, 0.32, ...] ,
-            #     "overwarps": [0, 3, ...],
-            #     "sentence poses": [4, 8, ...],
-            #     "normed_sentence_lengthes": [149, 44, ...],
-            #     "normed_damaged_lens": [12, 20, ...],
-            #     "jaccard_list": [0.55, 0.4323, ...],
-            # }
-
-            print(f"**{dataset} rs_lt_result result**")
-            md_converter = MDFY(ave_result(rs_lt_result))
-            md_table = md_converter.dict_to_md_table(
-                transpose=True, key_label="metric", value_label="value"
-            )
-            print(md_table)
-            write_json_to_file(
-                all_result,
-                output_dir.joinpath(dataset, f"{model}_rs_lt_result.json"),
+            rs_lt_result, rs_ge_result = QuerySentScore.preprocess(
+                rs_lt_result, rs_ge_result
             )
 
-            print(f"**{dataset} rs_ge_result result**")
-            md_converter = MDFY(ave_result(rs_ge_result))
-            md_table = md_converter.dict_to_md_table(
-                transpose=True, key_label="metric", value_label="value"
-            )
-            print(md_table)
-            write_json_to_file(
-                all_result,
-                output_dir.joinpath(dataset, f"{model}_rs_ge_result.json"),
-            )
+            write_json_to_file(rs_lt_result, rs_lt_result_path)
+            model_lt_results.append(rs_lt_result)
 
-            test_results = StatsTest(rs_lt_result, rs_ge_result).test()
-            pvalues_table = {
-                metric: t_res["pvalue"] for metric, t_res in test_results.items()
-            }
+            write_json_to_file(rs_ge_result, rs_ge_result_path)
+            model_ge_results.append(rs_ge_result)
 
-            print("**Statistical test**")
-            md_converter = MDFY(pvalues_table, precision=3)
-            md_table = md_converter.dict_to_md_table(
-                transpose=True, key_label="metric", value_label="pvalue"
-            )
-            print(md_table)
+        dataset_lt_results = concat_dict_lists(model_lt_results)
+        write_json_to_file(
+            dataset_lt_results,
+            output_dir.joinpath(dataset, "rs_ge_result.json"),
+        )
+        dataset_ge_results = concat_dict_lists(model_ge_results)
+        write_json_to_file(
+            dataset_ge_results,
+            output_dir.joinpath(dataset, "rs_ge_result.json"),
+        )
 
-        # all_result[dataset][model]["Overall"] = ave_result(whole_result)
-        # all_result[dataset][model]["Rank shift over 100"] = ave_result(rs100_result)
-        # all_result[dataset][model]["test_results"] = test_results
+        ave_dataset_lt_results = ave_result(dataset_lt_results)
+        write_json_to_file(
+            ave_dataset_lt_results,
+            output_dir.joinpath(dataset, "ave_rs_lt_result.json"),
+        )
 
-        # write_json_to_file(
-        #     [whole_result, rs100_result, test_results],
-        #     output_dir.joinpath(f"{dataset}_{model}_{skip_rs_lt}.json"),
-        # )
+        ave_dataset_ge_results = ave_result(dataset_ge_results)
+        write_json_to_file(
+            ave_dataset_ge_results,
+            output_dir.joinpath(dataset, "ave_rs_ge_result.json"),
+        )
+
+        labels = ["metrics", f"RS < {skip_rs_threshold}", f"{skip_rs_threshold} ≤ RS"]
+        results = [ave_dataset_lt_results, ave_dataset_ge_results]
+        md_table = MdTable(results, labels=labels, transpose=True, precision=6)
+        print(md_table, "\n")
+
+        test_results = StatsTest(dataset_lt_results, dataset_ge_results).test()
+        pvalues_table = {
+            metric: t_res["pvalue"] for metric, t_res in test_results.items()
+        }
+
+        print("**Statistical test**\n")
+        md_table = MdTable(pvalues_table, transpose=True, precision=4)
+
+        print(md_table)

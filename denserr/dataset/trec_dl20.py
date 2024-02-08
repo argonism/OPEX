@@ -6,7 +6,6 @@ import ir_datasets
 from tqdm import tqdm
 
 from ._base import (
-    CorpusDict,
     ILoadModel,
     QrelsDict,
     QueriesDict,
@@ -16,10 +15,11 @@ from ._base import (
 logger = getLogger(__name__)
 
 
-class LoadRobust04(ILoadModel):
+class LoadTrecDL20Doc(ILoadModel):
     def __init__(self) -> None:
         super().__init__()
-        self.dataset_key = "disks45/nocr/trec-robust-2004"
+        self.dataset_key = "msmarco-document/trec-dl-2020"
+        self.attr_map: Dict[str, str] = {}
         self.download_dataset()
 
     def download_dataset(self) -> None:
@@ -37,9 +37,10 @@ class LoadRobust04(ILoadModel):
 
     def load_queries(self) -> QueriesDict:
         dataset = ir_datasets.load(self.dataset_key)
+
         queries = {}
         for query in tqdm(dataset.queries_iter(), total=dataset.queries_count()):
-            queries[query.query_id] = query.description
+            queries[query.query_id] = query.text
 
         return queries
 
