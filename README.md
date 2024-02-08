@@ -41,6 +41,14 @@ resources/denserr/analyzer/damaged_analyzer/{SPLADE_result_filename}
 
 When changing the datasets, models, and various settings used in the experiments, please edit `conf/param.ini`.
 
+For example, if you are going to do experimets on msmarco document, set params like this:
+``` conf/param.int
+[DenseErrConfig]
+dataset_name=msmarco-doc
+```
+
+available datasets are listed at `denserr/dataset/load_dataset.py`
+
 ### Tasks
 
 To run Sentence Addition Analysis experiments, execute SentenceInstactAnalyze
@@ -57,8 +65,8 @@ python main.py denserr.Evaluate --local-scheduler
 
 ### For ColBERT, SPLADE
 
-To resolve dependency issues, we have prepared an conda environment yml for both ColBERT and SPLADE. 
-If you want to use either of these models, create and activate their respective conda envs.
+To resolve dependency issues, we have prepared an conda environment yml file for both ColBERT and SPLADE. 
+If you want to use these models, create and activate their respective conda envs.
 If you are using pyenv, don't forget to set the appropriate Python version using pyenv local [version].
 
 
